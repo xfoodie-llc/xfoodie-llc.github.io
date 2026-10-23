@@ -829,11 +829,10 @@ body {
          screen readers use to announce fields.
 
          IMPORTANT (how submission works today):
-         There is no server behind this page yet, so submitting does
-         NOT email anyone. script.js intercepts the submit, checks the
-         fields, and shows the success note below the form. To make
-         submissions actually arrive by email, see the big TODO
-         comment in script.js. -->
+         script.js intercepts the submit, checks the fields, and sends
+         them to FormSubmit, which emails the request to
+         contact@xfoodie.net. The success note below the form appears
+         only after FormSubmit accepts the submission. -->
     <section class="section" id="request">
       <div class="wrap">
         <h2>Request a machine</h2>
@@ -911,15 +910,13 @@ body {
       <p class="footer-brand">XFOODIE</p>
 
       <!-- CONTACT DETAILS:
-           Phone confirmed by Segundo (2026-10-20).
-           The email below is still a placeholder — swap in the real
-           business email before going live.
+           Phone and email confirmed by Segundo.
            The href="tel:..." and href="mailto:..." make them tappable
            on phones — keep the visible text and the href in sync. -->
       <p>
         Oklahoma City, OK<br>
         Phone: <a href="tel:+14054760434">(405) 476-0434</a><br>
-        Email: <a href="mailto:hello@xfoodie.net">hello@xfoodie.net</a>
+        Email: <a href="mailto:contact@xfoodie.net">contact@xfoodie.net</a>
       </p>
 
       <p class="copyright">© 2026 XFOODIE LLC. All rights reserved.</p>
@@ -938,10 +935,11 @@ body {
   "Request a machine" form:
 
     1. When the visitor clicks "Send request", STOP the browser's default
-       form behavior (which would try to load a new page that doesn't exist).
+       form behavior (which would reload the page).
     2. Check that every required field has something typed in it.
     3. If something is missing, show the error note and mark the empty
-       fields. If everything is filled in, show the success note.
+       fields. If everything is filled in, send the request to FormSubmit
+       and show the success note only after FormSubmit accepts it.
 
   A few words you'll see a lot:
 
@@ -962,33 +960,17 @@ body {
 "use strict";
 
 /* --------------------------------------------------------------------------
-   HOW REAL SUBMISSIONS WILL WORK (TODO — read before going live)
+   HOW REAL SUBMISSIONS WORK
    --------------------------------------------------------------------------
-   Right now this form is a DEMO: on submit it only validates the fields
-   and shows the success note on this page. Nobody gets emailed.
+   After validation, the submit handler sends the form fields to
+   FormSubmit's AJAX endpoint for contact@xfoodie.net. FormSubmit turns
+   each accepted submission into an email to that inbox. The success note
+   appears only after FormSubmit responds successfully; a failed send
+   shows the error note instead.
 
-   To make submissions actually reach the business, do ONE of these:
-
-   Option A (free, easiest): a free form endpoint service such as
-   Formspree (formspree.io), Web3Forms (web3forms.com) or Getform
-   (getform.io). Steps:
-     1. Create a free account on one of them and verify the RECEIVING
-        EMAIL ADDRESS — the inbox that should get the requests.
-        (Decide this with Segundo first; NOTHING is wired until you
-        type that address into the service's dashboard.)
-     2. The service gives you a unique URL ("endpoint"), e.g.
-        https://formspree.io/f/xyzabc.
-     3. Replace the success-note block inside the submit handler below
-        with a fetch() POST that sends the form data to that URL, then
-        show the success note only AFTER the network call succeeds.
-
-   Option B (later): your own tiny server or a Cloudflare Worker that
-   receives the POST and emails it via Gmail's API. More code, more
-   control, no third party.
-
-   Whatever you pick, NEVER put a raw email address or password in this
-   file as a "trick" to send mail — browsers can't send email directly,
-   and anything in this file is visible to every visitor of the site.
+   FormSubmit sends a one-time activation email to contact@xfoodie.net
+   on the first submission. That activation link must be clicked once
+   before submissions start landing in the inbox.
    -------------------------------------------------------------------------- */
 
 /* --------------------------------------------------------------------------
@@ -1004,6 +986,8 @@ var errorNote = document.getElementById("form-error");     // error box
 // "required" attribute inside the form. querySelectorAll returns them
 // as a list we can loop over.
 var requiredFields = form.querySelectorAll("[required]");
+var formSubmitEndpoint = "https://formsubmit.co/ajax/contact@xfoodie.net";
+var isSending = false; // prevents duplicate sends from repeated clicks
 
 /* --------------------------------------------------------------------------
    Listen for the submit event on the form.
@@ -1013,6 +997,11 @@ form.addEventListener("submit", function (event) {
   // Stop the browser's default "submit the form and reload the page"
   // behavior. We handle everything ourselves.
   event.preventDefault();
+
+  // Ignore extra clicks while a send is already in progress.
+  if (isSending) {
+    return;
+  }
 
   // Hide both notes from any previous attempt, so we start clean.
   successNote.hidden = true;
@@ -1038,25 +1027,66 @@ form.addEventListener("submit", function (event) {
   // field (a nice touch — puts the cursor right where the fix goes),
   // and stop here.
   if (missing.length > 0) {
+    errorNote.textContent =
+      "Please fill in every field marked with a * so we can reach you.";
     errorNote.hidden = false;
     missing[0].focus();
     return; // exit the function; don't run the code below
   }
 
-  /* ---- SUCCESS PATH ------------------------------------------------------
-     All required fields have values. Since there is no email endpoint
-     wired yet (see the TODO above), we simply show the success note
-     and clear the form. When you wire up a real endpoint, replace this
-     block with a fetch() call and move the lines below into the
-     "it worked" branch of that call.
+  /* ---- SEND + SUCCESS / FAILURE PATHS ------------------------------------
+     Copy the named form fields into a plain object, add FormSubmit's
+     email subject/template settings, and POST it as JSON. Only a
+     successful FormSubmit response reveals the success note.
      --------------------------------------------------------------------- */
-  successNote.hidden = false; // un-hide the green note
-  form.reset();               // empty all fields for a fresh form
+  var payload = {};
+  new FormData(form).forEach(function (value, key) {
+    payload[key] = value;
+  });
+  payload._subject = "New vending machine request — xfoodie.net";
+  payload._template = "table";
+  payload._replyto = payload.email;
 
-  // Scroll the success note into view so phone users see it even if
-  // the button was below the fold. { block: "nearest" } scrolls only
-  // as far as needed — it won't yank the whole page around.
-  successNote.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  isSending = true;
+
+  fetch(formSubmitEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+    .then(function (response) {
+      if (!response.ok) {
+        throw new Error("FormSubmit rejected the request");
+      }
+      return response.json().catch(function () {
+        return {};
+      });
+    })
+    .then(function (result) {
+      if (result.success === false || result.success === "false") {
+        throw new Error("FormSubmit could not send the request");
+      }
+
+      successNote.hidden = false; // un-hide the green note
+      form.reset();               // empty all fields for a fresh form
+
+      // Scroll the success note into view so phone users see it even if
+      // the button was below the fold. { block: "nearest" } scrolls only
+      // as far as needed — it won't yank the whole page around.
+      successNote.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    })
+    .catch(function () {
+      errorNote.textContent =
+        "Sorry — your request could not be sent. Please try again, or email us at contact@xfoodie.net.";
+      errorNote.hidden = false;
+      errorNote.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    })
+    .finally(function () {
+      isSending = false;
+    });
 });
 
 /* ==========================================================================
