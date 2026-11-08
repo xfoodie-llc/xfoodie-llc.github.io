@@ -119,6 +119,19 @@ body, h1, h2, h3, p, ul {
    a site feel expensive. */
 html {
   scroll-behavior: smooth;
+  /* Anchor jumps must stop below the 52px fixed header, or the top of
+     the target section hides underneath it. */
+  scroll-padding-top: 64px;
+}
+
+/* Respect visitors who ask their system for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .mobile-menu {
+    transition: none;
+  }
 }
 
 /* System font stack: use the fonts already installed on the visitor's
@@ -1034,6 +1047,19 @@ form.addEventListener("submit", function (event) {
     return; // exit the function; don't run the code below
   }
 
+  // The form uses novalidate, so the browser never checks the email
+  // format for us — do a basic shape check here (something@something.tld)
+  // or the reply address FormSubmit uses may be undeliverable.
+  var emailField = document.getElementById("email");
+  if (emailField && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailField.value.trim())) {
+    emailField.classList.add("invalid");
+    errorNote.textContent =
+      "Please check the email address — it doesn't look complete.";
+    errorNote.hidden = false;
+    emailField.focus();
+    return;
+  }
+
   /* ---- SEND + SUCCESS / FAILURE PATHS ------------------------------------
      Copy the named form fields into a plain object, add FormSubmit's
      email subject/template settings, and POST it as JSON. Only a
@@ -1049,6 +1075,15 @@ form.addEventListener("submit", function (event) {
 
   isSending = true;
 
+  // Give the send 15 seconds, then fail like any other error — without
+  // a timeout a hung connection would leave the form locked forever.
+  var controller = null;
+  var timeoutId = null;
+  if (typeof AbortController === "function") {
+    controller = new AbortController();
+    timeoutId = setTimeout(function () { controller.abort(); }, 15000);
+  }
+
   fetch(formSubmitEndpoint, {
     method: "POST",
     headers: {
@@ -1056,6 +1091,7 @@ form.addEventListener("submit", function (event) {
       Accept: "application/json",
     },
     body: JSON.stringify(payload),
+    signal: controller ? controller.signal : undefined,
   })
     .then(function (response) {
       if (!response.ok) {
@@ -1085,6 +1121,9 @@ form.addEventListener("submit", function (event) {
       errorNote.scrollIntoView({ behavior: "smooth", block: "nearest" });
     })
     .finally(function () {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       isSending = false;
     });
 });
@@ -1141,6 +1180,23 @@ document.addEventListener("keydown", function (event) {
     closeMenu();
   }
 });
+
+// If the screen grows to desktop width while the menu is open (rotation,
+// resize), CSS hides the menu — close it properly so the page behind it
+// isn't left frozen (body overflow: hidden) with no way to unfreeze it.
+if (typeof window.matchMedia === "function") {
+  var desktopQuery = window.matchMedia("(min-width: 760px)");
+  var onViewportChange = function (event) {
+    if (event.matches) {
+      closeMenu();
+    }
+  };
+  if (typeof desktopQuery.addEventListener === "function") {
+    desktopQuery.addEventListener("change", onViewportChange);
+  } else if (typeof desktopQuery.addListener === "function") {
+    desktopQuery.addListener(onViewportChange); // older Safari
+  }
+}
 
 </script>
 </body>
